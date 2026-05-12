@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>05. Bun+Codex 통합 - Open Design RE</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">Provider는 OpenAI Codex CLI만 고려합니다.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Chapter 05</div>
+        <h1>Bun 기반 AI Code Agent 프로젝트에 통합하는 방법</h1>
+        <p class="lead">Open Design을 그대로 옮기는 대신, Codex 전용으로 좁히면 필요한 구현은 명확해집니다. 핵심은 "프롬프트/자산/프로젝트 파일을 준비하고 Codex CLI를 안정적으로 실행한 뒤, HTML artifact를 안전하게 다루는 것"입니다.</p>
+      </section>
+
+      <section class="toolbar">
+        <input class="search" data-filter="[data-keywords]" placeholder="검색: dependency, codex, bun, api, schema">
+        <button data-expand-all>모두 펼치기</button>
+        <button data-collapse-all>모두 접기</button>
+      </section>
+
+      <section>
+        <h2>최소 모듈 구조 제안</h2>
+        <pre id="tree"><code>src/
+  server/
+    http.ts                  # Bun.serve / routes / SSE helpers
+    runs.ts                  # run lifecycle, replayable events, cancel
+    projects.ts              # project file CRUD + artifact manifests
+  codex/
+    detect.ts                # codex binary / version / auth sanity
+    runner.ts                # spawn, stdin, env, cwd, timeout
+    events.ts                # Codex JSON lines -> normalized AgentEvent
+  design/
+    frontmatter.ts           # SKILL.md parser
+    skill-registry.ts        # skills/design-templates scan
+    design-system-registry.ts# DESIGN.md scan + swatches
+    prompt-compose.ts        # discovery + DESIGN + SKILL + metadata
+  web/
+    artifact-parser.ts       # &lt;artifact&gt; streaming parser
+    question-form.ts         # &lt;question-form&gt; parser and formatter
+    html-preview/            # srcdoc iframe bridges
+    manual-edit/             # DOMParser source patcher</code></pre>
+        <button data-copy="#tree">트리 복사</button>
+      </section>
+
+      <section>
+        <h2>의존성</h2>
+        <table>
+          <thead><tr><th>영역</th><th>Open Design</th><th>Bun 통합 권장</th><th>메모</th></tr></thead>
+          <tbody>
+            <tr><td>Runtime</td><td>Node ~24, pnpm</td><td>Bun 최신 stable</td><td>Codex CLI spawn은 Bun.spawn 또는 node:child_process 호환 API 사용.</td></tr>
+            <tr><td>HTTP/SSE</td><td>Express</td><td>Bun.serve + ReadableStream</td><td>SSE replay를 위해 run event buffer 유지.</td></tr>
+            <tr><td>DB</td><td>better-sqlite3</td><td>bun:sqlite 또는 libsql</td><td>projects/conversations/messages/runs metadata 저장.</td></tr>
+            <tr><td>File watch</td><td>chokidar 일부</td><td>초기에는 scan-on-request</td><td>스킬/디자인 시스템은 수백 개라 request-time scan도 가능하나 cache 권장.</td></tr>
+            <tr><td>YAML</td><td>custom subset parser</td><td>custom subset 유지 또는 yaml 패키지</td><td>호환성을 원하면 복잡한 YAML도 처리 가능한 parser 권장.</td></tr>
+            <tr><td>Frontend</td><td>Next.js + React</td><td>현재 프로젝트 stack에 맞춤</td><td>HTML preview/editor는 framework 독립 TS로 분리 가능.</td></tr>
+            <tr><td>LLM Provider</td><td>다중 CLI + API fallback</td><td>OpenAI Codex CLI only</td><td>provider abstraction 최소화. model/reasoning만 옵션으로 유지.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Codex runner contract</h2>
+        <details open data-keywords="codex args">
+          <summary>실행 args</summary>
+          <pre><code>codex exec \
+  --json \
+  --skip-git-repo-check \
+  --sandbox workspace-write \
+  -c sandbox_workspace_write.network_access=true \
+  -C &lt;project-cwd&gt; \
+  --model &lt;model&gt; \
+  -c model_reasoning_effort="&lt;effort&gt;"</code></pre>
+          <p>프롬프트는 stdin으로 전달합니다. Open Design 주석에 따르면 최근 Codex CLI는 bare <code>-</code> sentinel을 거부하므로 args에 <code>-</code>를 넣지 않습니다.</p>
+        </details>
+        <details data-keywords="codex event parser">
+          <summary>Codex JSON event 변환</summary>
+          <table>
+            <thead><tr><th>Codex event</th><th>정규화 event</th></tr></thead>
+            <tbody>
+              <tr><td><code>thread.started</code></td><td><code>{ type: "status", label: "initializing" }</code></td></tr>
+              <tr><td><code>turn.started</code></td><td><code>{ type: "status", label: "running" }</code></td></tr>
+              <tr><td><code>item.started command_execution</code></td><td><code>tool_use</code> name <code>Bash</code></td></tr>
+              <tr><td><code>item.completed command_execution</code></td><td><code>tool_result</code> with aggregated output, exit status</td></tr>
+              <tr><td><code>item.completed agent_message</code></td><td><code>text_delta</code></td></tr>
+              <tr><td><code>turn.completed usage</code></td><td><code>usage</code></td></tr>
+              <tr><td><code>error</code>, <code>turn.failed</code></td><td><code>error</code></td></tr>
+            </tbody>
+          </table>
+        </details>
+        <details data-keywords="codex env paths">
+          <summary>환경 변수와 cwd</summary>
+          <ul>
+            <li><code>cwd</code>는 반드시 프로젝트 파일 루트. Codex가 생성/편집할 파일 범위를 명확히 합니다.</li>
+            <li><code>OD_PROJECT_DIR</code>, <code>OD_PROJECT_ID</code> 같은 project hint를 제공하면 media/tooling 확장이 쉬워집니다.</li>
+            <li><code>CODEX_HOME</code>은 이미지 생성 등 Codex side output 탐색 시 필요할 수 있습니다.</li>
+            <li>active skill sidefile은 <code>.od-skills/&lt;name&gt;</code>로 cwd 안에 복사하는 방식이 Codex sandbox와 가장 잘 맞습니다.</li>
+          </ul>
+        </details>
+      </section>
+
+      <section>
+        <h2>Prompt composer 구현 포인트</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="discovery prompt">
+            <h3>Discovery layer</h3>
+            <p>질문 폼, direction picker, TodoWrite, checklist, critique, artifact emission invariant를 가장 앞에 둡니다. 이것이 전체 UX의 핵심이므로 먼저 이식해야 합니다.</p>
+          </article>
+          <article class="card" data-keywords="prd metadata">
+            <h3>PRD metadata layer</h3>
+            <p>기획서 기반 시스템에서는 Open Design의 <code>Project metadata</code>를 확장해 제품 타입, 사용자 역할, 기능 범위, IA, 데이터 모델, auth 요구, 플랫폼 target을 structured block으로 넣습니다.</p>
+          </article>
+          <article class="card" data-keywords="skill body">
+            <h3>Skill layer</h3>
+            <p><code>SKILL.md</code>를 "산출물 종류별 구현 프로토콜"로 사용합니다. 예: <code>prd-to-web-app</code>, <code>prd-to-admin-dashboard</code>, <code>prd-to-mobile-prototype</code>.</p>
+          </article>
+          <article class="card" data-keywords="design system">
+            <h3>Design layer</h3>
+            <p><code>DESIGN.md</code>는 브랜드 시스템뿐 아니라 도메인 UI 규칙으로 쓰세요. B2B SaaS, fintech, healthcare 등 제품 도메인별 anti-pattern을 넣으면 생성 품질이 안정됩니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>API contract 제안</h2>
+        <table>
+          <thead><tr><th>Endpoint</th><th>Method</th><th>Body/Response</th><th>용도</th></tr></thead>
+          <tbody>
+            <tr><td><code>/api/runs</code></td><td>POST</td><td><code>{ projectId, message, skillId, designSystemId, model, reasoning }</code> → <code>{ runId }</code></td><td>Codex run 시작</td></tr>
+            <tr><td><code>/api/runs/:id/events</code></td><td>GET</td><td>SSE</td><td>start/agent/stderr/error/end 이벤트</td></tr>
+            <tr><td><code>/api/runs/:id/cancel</code></td><td>POST</td><td><code>{ ok }</code></td><td>child SIGTERM</td></tr>
+            <tr><td><code>/api/projects/:id/files</code></td><td>GET/POST</td><td>file list / write</td><td>artifact와 manual edit 저장</td></tr>
+            <tr><td><code>/api/skills</code></td><td>GET</td><td>catalog</td><td>실행 프로토콜 선택</td></tr>
+            <tr><td><code>/api/design-systems</code></td><td>GET</td><td>catalog</td><td>디자인 규칙 선택</td></tr>
+            <tr><td><code>/api/artifacts/lint</code></td><td>POST</td><td><code>{ html }</code> → findings</td><td>저장 전 품질/안전 점검</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Codex 전용으로 단순화할 수 있는 설계</h2>
+        <div class="grid cols-2">
+          <details open data-keywords="simplify">
+            <summary>단순화</summary>
+            <ul>
+              <li>agent registry는 Codex 하나만 남기고 model/reasoning 목록만 유지.</li>
+              <li>stream parser는 Codex JSON event만 지원.</li>
+              <li>promptViaStdin은 항상 true.</li>
+              <li>외부 MCP 전달은 v1에서 제외하고, 필요하면 Codex 설정 파일 기반으로 별도 설계.</li>
+              <li>API fallback provider는 제거. 사용자는 Codex CLI auth를 선행.</li>
+            </ul>
+          </details>
+          <details data-keywords="must keep">
+            <summary>그래도 유지해야 할 복잡도</summary>
+            <ul>
+              <li>긴 프롬프트/큰 tool result로 인한 run stall 감지.</li>
+              <li>stderr tail과 structured error를 UI에 표시.</li>
+              <li>project cwd와 skill sidefile staging의 권한/경로 검증.</li>
+              <li>artifact가 prose를 HTML로 오인해 저장되는 문제 방지.</li>
+              <li>iframe sandbox와 postMessage source 검증.</li>
+            </ul>
+          </details>
+        </div>
+      </section>
+
+      <section>
+        <h2>구현 우선순위</h2>
+        <ol>
+          <li>Codex run lifecycle + SSE + event parser.</li>
+          <li>Prompt composer + question-form protocol.</li>
+          <li>SKILL/DESIGN scanner + active resource injection.</li>
+          <li>Artifact streaming parser + project file 저장.</li>
+          <li>Sandboxed HTML preview.</li>
+          <li>Manual edit bridge/source patcher.</li>
+          <li>Comment/inspect/tweak 고급 기능.</li>
+        </ol>
+      </section>
+
+      <section class="callout">
+        <strong>핵심 설계 판단:</strong>
+        Bun 시스템이 "기획서 기반 코딩 에이전트"라면 Open Design의 artifact loop를 일반 코드 생성 루프와 분리하세요. PRD → 질문/설계 → HTML prototype은 빠른 feedback surface이고, PRD → 실제 repo 코드 변경은 Codex의 일반 coding workflow입니다. 둘을 같은 iframe/editor로 처리하면 안전 경계가 흐려집니다.
+      </section>
+
+      <footer class="foot">다음: <a href="06-implementation-roadmap.html">구현 로드맵과 작업 체크리스트</a></footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>02. LLM/질문 로직 - Open Design RE</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">질문 폼은 UI가 생성하지 않습니다. LLM이 prompt protocol에 따라 출력합니다.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Chapter 02</div>
+        <h1>LLM이 항목과 질문을 생성하는 방식</h1>
+        <p class="lead">Open Design의 질문/생성 로직은 hard-coded wizard가 아닙니다. Daemon이 system prompt에 규칙과 예시 JSON을 넣고, Codex가 <code>&lt;question-form&gt;</code>, Todo plan, artifact를 순서대로 출력하도록 강제합니다.</p>
+      </section>
+
+      <section class="toolbar">
+        <input class="search" data-filter="[data-keywords]" placeholder="검색: question-form, direction, artifact, prompt">
+        <button data-expand-all>모두 펼치기</button>
+        <button data-collapse-all>모두 접기</button>
+      </section>
+
+      <section>
+        <h2>Prompt Stack</h2>
+        <div class="flow step-grid">
+          <div class="step"><small>Layer 0</small><strong>API/plain override</strong><span>plain stream adapter일 때 tool call 흉내를 금지. Codex는 JSON event stream이라 보통 미사용.</span></div>
+          <div class="step"><small>Layer 1</small><strong>Discovery & philosophy</strong><span>질문 폼, direction picker, TodoWrite, anti-slop, artifact emission invariant.</span></div>
+          <div class="step"><small>Layer 2</small><strong>Base designer prompt</strong><span>HTML artifact handoff 규약과 designer identity.</span></div>
+          <div class="step"><small>Layer 3</small><strong>Memory + DESIGN.md</strong><span>사용자 memory 다음 active design system body를 권위 있는 token source로 삽입.</span></div>
+          <div class="step"><small>Layer 4</small><strong>tokens.css/components.html</strong><span><code>OD_DESIGN_TOKEN_CHANNEL=1</code>일 때 구조화된 token/fixture 추가.</span></div>
+          <div class="step"><small>Layer 5</small><strong>Craft + SKILL.md</strong><span>skill이 요구한 craft 문서와 active skill workflow 삽입.</span></div>
+          <div class="step"><small>Layer 6</small><strong>Project metadata</strong><span>kind/platform/fidelity/template/animations 등 unknown이면 질문에 포함하라고 지시.</span></div>
+          <div class="step"><small>Layer 7</small><strong>Mode-specific addenda</strong><span>deck framework, media contract, Codex imagegen override, MCP guidance.</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>질문 생성 프로토콜</h2>
+        <details open data-keywords="turn 1 discovery question form">
+          <summary>Turn 1: discovery form</summary>
+          <p><a href="../apps/daemon/src/prompts/discovery.ts">discovery.ts</a>는 새 디자인 작업의 첫 응답을 "짧은 prose 한 줄 + <code>&lt;question-form id=\"discovery\"&gt;</code> + stop"으로 강제합니다.</p>
+          <pre><code>&lt;question-form id="discovery" title="Quick brief — 30 seconds"&gt;
+{
+  "description": "I'll lock these in before building...",
+  "questions": [
+    { "id": "output", "label": "What are we making?", "type": "radio", "required": true,
+      "options": ["Slide deck / pitch", "Single web prototype / landing", "..."] },
+    { "id": "platform", "label": "Target platform", "type": "checkbox", "maxSelections": 4,
+      "options": ["Responsive web", "Desktop web", "iOS app", "..."] }
+  ]
+}
+&lt;/question-form&gt;</code></pre>
+          <p>중요한 점은 질문 세트가 고정 UI가 아니라 LLM에게 "tailor the questions"라고 지시된다는 것입니다. 즉 프로젝트 메타데이터가 이미 <code>kind=deck</code>이면 output 질문을 제거하고, <code>speakerNotes</code>가 unknown이면 해당 질문을 추가합니다.</p>
+        </details>
+        <details data-keywords="turn 2 direction cards brand">
+          <summary>Turn 2: brand 답변에 따른 분기</summary>
+          <table>
+            <thead><tr><th>brand 답변</th><th>LLM 행동</th><th>목적</th></tr></thead>
+            <tbody>
+              <tr><td>Pick a direction for me</td><td><code>&lt;question-form id="direction"&gt;</code> 생성</td><td>모델이 임의로 미감을 고르지 않고 5개 deterministic direction 중 사용자가 선택</td></tr>
+              <tr><td>I have a brand spec</td><td>브랜드 자료 탐색, 색/폰트 추출, <code>brand-spec.md</code> 작성</td><td>기억 기반 추측 대신 실제 source에서 token 추출</td></tr>
+              <tr><td>Match a reference site / screenshot</td><td>첨부/URL 분석 후 token codify</td><td>reference-grounded output</td></tr>
+              <tr><td>기타</td><td>TodoWrite로 바로 진행</td><td>불필요한 질문 루프 제거</td></tr>
+            </tbody>
+          </table>
+        </details>
+        <details data-keywords="turn 3 todowrite artifact">
+          <summary>Turn 3+: TodoWrite, self-check, artifact</summary>
+          <p>방향이 확정되면 첫 tool call은 TodoWrite입니다. 계획은 active <code>DESIGN.md</code>, skill asset, layout, placeholder replacement, checklist, 5-dim critique, artifact emission 순서로 구성됩니다.</p>
+          <p>핵심 invariant: 이 턴에 새 canonical HTML 파일을 쓴 경우에만 <code>&lt;artifact&gt;</code>를 emit합니다. 기존 파일을 편집만 했으면 artifact를 다시 emit하지 않습니다.</p>
+        </details>
+      </section>
+
+      <section>
+        <h2>Direction Library</h2>
+        <p><a href="../apps/daemon/src/prompts/directions.ts">directions.ts</a>는 5개 visual direction을 code-level data로 갖고 있습니다. 이 데이터는 질문 폼 카드 렌더링과 prompt 내부 spec block 두 곳에 쓰입니다.</p>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="editorial monocle"><h3>editorial-monocle</h3><p>serif display, print magazine, paper/ink/red accent. Editorial/Publishing 용도.</p></article>
+          <article class="card" data-keywords="modern minimal"><h3>modern-minimal</h3><p>Linear/Vercel 계열, neutral foundation + cobalt accent, software-native.</p></article>
+          <article class="card" data-keywords="human approachable"><h3>human-approachable</h3><p>consumer/education/assistant에 적합. clean neutral + teal accent + generous radius.</p></article>
+          <article class="card" data-keywords="tech utility"><h3>tech-utility</h3><p>GitHub/Datadog 계열. dense table, status pills, mono numerics, engineer-facing UI.</p></article>
+          <article class="card" data-keywords="brutalist experimental"><h3>brutalist-experimental</h3><p>Are.na/Yale 계열. 강한 border, 거대한 serif, mono body, 거의 radius 없음.</p></article>
+        </div>
+      </section>
+
+      <section>
+        <h2>질문 폼 파싱과 답변 회수</h2>
+        <div class="flow step-grid">
+          <div class="step"><small>Parse</small><strong><code>splitOnQuestionForms()</code></strong><span>assistant text에서 <code>&lt;question-form&gt;</code> 블록을 찾아 JSON body를 <code>QuestionForm</code>으로 변환.</span></div>
+          <div class="step"><small>Render</small><strong><code>QuestionFormView</code></strong><span>radio/checkbox/select/text/textarea/direction-cards 렌더링. required와 maxSelections 검증.</span></div>
+          <div class="step"><small>Submit</small><strong><code>formatFormAnswers()</code></strong><span>사용자 답변을 <code>[form answers — discovery]</code> 텍스트 메시지로 변환해 다음 Codex turn에 전달.</span></div>
+          <div class="step"><small>Lock</small><strong><code>parseSubmittedAnswers()</code></strong><span>이전 assistant form 바로 다음 user message를 읽어 제출된 폼을 locked state로 렌더링.</span></div>
+        </div>
+        <pre><code>[form answers — discovery]
+- What are we making?: Dashboard / tool UI
+- Target platform: Responsive web, Desktop web
+- Who is this for?: Internal planning team
+- Brand context: Pick a direction for me</code></pre>
+      </section>
+
+      <section>
+        <h2>항목 생성 로직의 실제 의미</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="items output screens slides">
+            <h3>화면/슬라이드/섹션 항목</h3>
+            <p>코드가 항목을 계산하지 않습니다. Prompt가 "Plan section/slide/screen list with platform variants"라고 요구하고, LLM이 TodoWrite 단계에서 구조를 정합니다. Skill의 <code>references/layouts.md</code>가 있으면 이 구조의 골격을 제한합니다.</p>
+          </article>
+          <article class="card" data-keywords="project metadata">
+            <h3>메타데이터 기반 질문 축소/추가</h3>
+            <p><code>renderMetadataBlock()</code>는 이미 알려진 field와 unknown field를 구분합니다. LLM은 unknown field를 turn-1 form에 넣어야 합니다. 이 방식이 "기획서 기반" 시스템에도 가장 유용합니다.</p>
+          </article>
+          <article class="card" data-keywords="anti slop critique">
+            <h3>품질 제어</h3>
+            <p>anti-AI-slop checklist, skill checklist P0/P1/P2, 5-dimensional critique가 모두 prompt-level guard입니다. 자동 verifier가 아니라 LLM self-discipline 구조이므로, 이식 시 lint/visual QA로 보강하는 것이 좋습니다.</p>
+          </article>
+          <article class="card" data-keywords="artifact conditional">
+            <h3>artifact emission</h3>
+            <p>LLM이 complete HTML document를 <code>&lt;artifact type="text/html"&gt;</code>로 감쌉니다. Web은 stream 중에도 preview하고, 종료 후 <code>validateHtmlArtifact()</code>를 통과하면 파일로 저장합니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="callout">
+        <strong>기획서 기반 코딩 에이전트에 적용할 결론:</strong>
+        PRD/기획서를 바로 구현하지 말고, 먼저 "unknown field extraction"을 수행해 질문 폼을 생성하세요. 단, 질문 폼 자체를 UI hard-code로 만들기보다 Codex system prompt에 JSON schema와 turn rules를 넣으면 도메인별 질문이 자연스럽게 확장됩니다.
+      </section>
+
+      <footer class="foot">다음: <a href="03-html-editor-preview.html">HTML 에디터/프리뷰 역공학</a></footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>

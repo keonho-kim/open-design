@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Open Design 역공학 분석</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">분석 기준: 로컬 저장소 <code>open-design</code>, Provider/Agent는 OpenAI Codex만 고려.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Reverse engineering result</div>
+        <h1>Open Design을 기획서 기반 코딩 에이전트에 녹이기 위한 분석 문서</h1>
+        <p class="lead">이 문서 세트는 Open Design의 핵심 루프인 스킬/디자인 시스템 선택, LLM 질문 생성, Codex CLI 실행, HTML artifact 스트리밍, iframe 프리뷰, inspect/manual edit 저장 흐름을 통합 관점에서 재구성합니다.</p>
+      </section>
+
+      <section class="grid cols-3">
+        <article class="card metric">
+          <strong>149</strong>
+          <span>복사된 <code>DESIGN.md</code> 디자인 시스템</span>
+        </article>
+        <article class="card metric">
+          <strong>217</strong>
+          <span>복사된 <code>SKILL.md</code> / design-template 스킬</span>
+        </article>
+        <article class="card metric">
+          <strong>380</strong>
+          <span><code>reverse-engineering/assets/source-files</code>의 원본 분석 자산</span>
+        </article>
+      </section>
+
+      <section>
+        <h2>핵심 결론</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="architecture daemon web codex">
+            <h3>1. Open Design은 자체 LLM 런타임이 아니라 agent orchestration shell입니다</h3>
+            <p>Daemon이 프롬프트를 조합하고 Codex CLI를 headless로 실행합니다. 모델 호출, tool use, 파일 작성은 Codex가 담당하고, Open Design은 실행 디렉터리, system prompt, SSE 이벤트, artifact 파싱/저장을 담당합니다.</p>
+            <p><a href="01-system-architecture.html">시스템 구조 보기</a></p>
+          </article>
+          <article class="card" data-keywords="question form discovery direction">
+            <h3>2. 질문 생성은 프론트엔드 기능이 아니라 system prompt protocol입니다</h3>
+            <p><code>&lt;question-form&gt;</code>은 LLM이 생성하는 XML-ish 블록이고, 웹이 JSON body를 파싱해 폼으로 렌더링합니다. 답변은 다시 <code>[form answers — id]</code> 텍스트로 다음 턴에 들어갑니다.</p>
+            <p><a href="02-prompt-llm-flow.html">질문/LLM 흐름 보기</a></p>
+          </article>
+          <article class="card" data-keywords="html editor iframe manual edit inspect">
+            <h3>3. HTML 에디터는 DOM bridge + source patcher 조합입니다</h3>
+            <p>프리뷰 iframe은 sandboxed <code>srcdoc</code>입니다. selection/comment/inspect/manual-edit bridge 스크립트를 주입하고, 수동 편집은 DOMParser로 원본 HTML을 수정한 뒤 프로젝트 파일 API에 저장합니다.</p>
+            <p><a href="03-html-editor-preview.html">HTML 에디터 분석 보기</a></p>
+          </article>
+          <article class="card" data-keywords="bun codex integration">
+            <h3>4. Bun 프로젝트에 이식하려면 6개 경계가 필요합니다</h3>
+            <p>리소스 레지스트리, prompt composer, Codex runner, stream normalizer, artifact parser/store, iframe/editor runtime을 독립 모듈로 분리하면 됩니다. OpenAI Codex만 대상으로 하면 provider abstraction은 크게 줄일 수 있습니다.</p>
+            <p><a href="05-bun-codex-integration.html">Bun+Codex 통합 보기</a></p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>End-to-End 흐름</h2>
+        <div class="flow step-grid">
+          <div class="step"><small>1</small><strong>사용자 brief 입력</strong><span>프로젝트 메타데이터, skillId, designSystemId, 첨부 파일 포함</span></div>
+          <div class="step"><small>2</small><strong>Daemon prompt compose</strong><span>Discovery prompt + DESIGN.md + SKILL.md + metadata + Codex 지시</span></div>
+          <div class="step"><small>3</small><strong>Codex CLI spawn</strong><span><code>codex exec --json ...</code>, prompt는 stdin으로 전달</span></div>
+          <div class="step"><small>4</small><strong>SSE stream normalize</strong><span>Codex JSON event를 text/tool/usage/error 이벤트로 변환</span></div>
+          <div class="step"><small>5</small><strong>Web parser</strong><span><code>&lt;question-form&gt;</code>, <code>&lt;artifact&gt;</code>를 채팅/프리뷰로 분기</span></div>
+          <div class="step"><small>6</small><strong>HTML preview/editor</strong><span>sandbox iframe, inspect/manual edit, project file 저장</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>문서 사용법</h2>
+        <div class="toolbar">
+          <input class="search" data-filter="[data-keywords]" placeholder="이 페이지 카드 검색: codex, editor, prompt...">
+          <button data-expand-all>모두 펼치기</button>
+          <button data-collapse-all>모두 접기</button>
+        </div>
+        <details open data-keywords="assets source files">
+          <summary>복사된 원본 자산 위치</summary>
+          <p>원본 <code>SKILL.md</code>, <code>DESIGN.md</code>, <code>AGENTS.md</code>는 상대 경로를 유지한 채 <a href="assets/source-files/">assets/source-files/</a> 아래 복사했습니다. 예: <a href="assets/source-files/design-templates/web-prototype/SKILL.md">web-prototype/SKILL.md</a>, <a href="assets/source-files/design-systems/openai/DESIGN.md">openai/DESIGN.md</a>.</p>
+        </details>
+        <details data-keywords="source references">
+          <summary>주요 분석 원본 코드</summary>
+          <ul>
+            <li><a href="../apps/daemon/src/server.ts">apps/daemon/src/server.ts</a>: chat run 조립, Codex 실행, cwd/스킬 staging.</li>
+            <li><a href="../apps/daemon/src/prompts/system.ts">apps/daemon/src/prompts/system.ts</a>: system prompt composer.</li>
+            <li><a href="../apps/daemon/src/prompts/discovery.ts">apps/daemon/src/prompts/discovery.ts</a>: 질문 폼/방향 선택 프로토콜.</li>
+            <li><a href="../apps/daemon/src/runtimes/defs/codex.ts">apps/daemon/src/runtimes/defs/codex.ts</a>: Codex CLI adapter.</li>
+            <li><a href="../apps/web/src/components/ProjectView.tsx">apps/web/src/components/ProjectView.tsx</a>: artifact parser와 저장.</li>
+            <li><a href="../apps/web/src/runtime/srcdoc.ts">apps/web/src/runtime/srcdoc.ts</a>: sandbox iframe bridge 주입.</li>
+            <li><a href="../apps/web/src/edit-mode/source-patches.ts">apps/web/src/edit-mode/source-patches.ts</a>: manual edit source patching.</li>
+          </ul>
+        </details>
+      </section>
+
+      <footer class="foot">생성 위치: <code>reverse-engineering/</code>. Provider 범위: OpenAI Codex only.</footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>

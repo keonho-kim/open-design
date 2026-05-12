@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>01. 시스템 구조 - Open Design RE</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">주요 파일: <code>apps/daemon/src/server.ts</code>, <code>apps/web/src/components/ProjectView.tsx</code>.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Chapter 01</div>
+        <h1>시스템 구조와 런타임 경계</h1>
+        <p class="lead">Open Design은 monorepo 앱이지만 기능 경계는 명확합니다. Daemon이 로컬 리소스와 agent 실행을 소유하고, Web은 채팅/프리뷰/편집 UI를 소유합니다. 프로젝트 파일은 Daemon API를 통해 저장됩니다.</p>
+      </section>
+
+      <section class="toolbar">
+        <input class="search" data-filter="[data-keywords]" placeholder="검색: daemon, project, codex, sse, storage">
+        <button data-expand-all>모두 펼치기</button>
+        <button data-collapse-all>모두 접기</button>
+      </section>
+
+      <section>
+        <h2>구성 요소</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="web react next projectview">
+            <h3>Web app</h3>
+            <p><code>apps/web</code>는 Next.js + React 클라이언트입니다. 핵심 화면은 <a href="../apps/web/src/components/ProjectView.tsx">ProjectView.tsx</a>, 프리뷰는 <a href="../apps/web/src/components/FileViewer.tsx">FileViewer.tsx</a>, 질문 폼은 <a href="../apps/web/src/components/QuestionForm.tsx">QuestionForm.tsx</a>가 담당합니다.</p>
+            <p>Web은 LLM을 직접 호출하지 않습니다. <code>/api/runs</code>를 만들고 SSE를 구독합니다.</p>
+          </article>
+          <article class="card" data-keywords="daemon express sqlite runs server">
+            <h3>Daemon</h3>
+            <p><code>apps/daemon</code>은 Express + SQLite 로컬 데몬입니다. agent detect, Codex spawn, skills/design systems scan, 프로젝트 파일 저장, artifact lint, static routes를 담당합니다.</p>
+            <p>주요 진입점은 <a href="../apps/daemon/src/server.ts">server.ts</a>와 <a href="../apps/daemon/src/chat-routes.ts">chat-routes.ts</a>입니다.</p>
+          </article>
+          <article class="card" data-keywords="codex cli adapter">
+            <h3>Codex adapter</h3>
+            <p><a href="../apps/daemon/src/runtimes/defs/codex.ts">codex.ts</a>는 <code>codex exec --json --skip-git-repo-check --sandbox workspace-write</code>를 구성합니다. 프롬프트는 argv가 아니라 stdin으로 전달됩니다.</p>
+            <p>Codex output은 <code>json-event-stream</code>으로 파싱되고 <a href="../apps/daemon/src/json-event-stream.ts">json-event-stream.ts</a>에서 UI 이벤트로 정규화됩니다.</p>
+          </article>
+          <article class="card" data-keywords="resources skills design systems">
+            <h3>Resource registries</h3>
+            <p><a href="../apps/daemon/src/skills.ts">skills.ts</a>와 <a href="../apps/daemon/src/design-systems.ts">design-systems.ts</a>가 파일 시스템을 스캔합니다. built-in/user root를 분리하고 user root가 우선합니다.</p>
+            <p>정적 API는 <a href="../apps/daemon/src/static-resource-routes.ts">static-resource-routes.ts</a>에 모여 있습니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>런타임 시퀀스</h2>
+        <div class="flow">
+          <div class="step" data-keywords="project web send"><small>Web</small><strong>사용자가 메시지를 보냄</strong><span><code>streamViaDaemon()</code>이 전체 대화 transcript, <code>projectId</code>, <code>skillId</code>, <code>designSystemId</code>, model/reasoning을 <code>POST /api/runs</code>로 전달합니다.</span></div>
+          <div class="step" data-keywords="runs sse"><small>Daemon</small><strong>run 생성 및 SSE 준비</strong><span><code>createChatRunService()</code>가 run id, 상태, 이벤트 버퍼, child process 핸들을 관리합니다. <code>/api/runs/:id/events</code>는 재접속 가능한 SSE입니다.</span></div>
+          <div class="step" data-keywords="compose prompt skills design"><small>Daemon</small><strong>system prompt 조합</strong><span><code>composeDaemonSystemPrompt()</code>가 active skill, active design system, craft, memory, project metadata를 읽어 <code>composeSystemPrompt()</code>에 넣습니다.</span></div>
+          <div class="step" data-keywords="spawn codex stdin"><small>Daemon</small><strong>Codex CLI 실행</strong><span><code>buildArgs()</code>로 args를 만든 뒤 <code>spawn()</code>. <code>promptViaStdin</code>이라 child stdin에 composed prompt를 씁니다.</span></div>
+          <div class="step" data-keywords="json event stream"><small>Daemon</small><strong>stream 정규화</strong><span>Codex JSON line: <code>thread.started</code>, <code>turn.started</code>, <code>item.started/completed</code>, <code>turn.completed</code>를 status/text/tool/usage/error로 변환합니다.</span></div>
+          <div class="step" data-keywords="web parser artifact file"><small>Web</small><strong>채팅/프리뷰 반영</strong><span>text delta는 artifact parser를 통과합니다. <code>&lt;artifact&gt;</code>는 live preview로 보여주고 완료 시 project file로 저장합니다.</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>데이터 저장 경계</h2>
+        <table>
+          <thead><tr><th>데이터</th><th>소유자</th><th>경로/테이블</th><th>통합 시 재현할 것</th></tr></thead>
+          <tbody>
+            <tr><td>프로젝트 파일</td><td>Daemon</td><td><code>.od/projects/&lt;id&gt;</code> 또는 git-linked <code>metadata.baseDir</code></td><td>파일 CRUD API, path traversal guard, artifact manifest sidecar</td></tr>
+            <tr><td>채팅 run</td><td>Daemon memory + DB row reconcile</td><td><code>createChatRunService</code>, <code>messages</code></td><td>queued/running/succeeded/failed/canceled 상태, SSE replay</td></tr>
+            <tr><td>스킬/템플릿</td><td>File system</td><td><code>skills/</code>, <code>design-templates/</code>, user roots</td><td>frontmatter parser, body + sidefile staging, id alias</td></tr>
+            <tr><td>디자인 시스템</td><td>File system</td><td><code>design-systems/&lt;slug&gt;/DESIGN.md</code></td><td>catalog summary, swatch extraction, prompt injection</td></tr>
+            <tr><td>HTML artifact manifest</td><td>Web 생성 + Daemon 검증</td><td><code>*.artifact.json</code></td><td>entry, kind, renderer, sourceSkillId, designSystemId</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Codex만 남길 때 제거 가능한 범위</h2>
+        <div class="grid cols-2">
+          <details open data-keywords="keep codex">
+            <summary>반드시 유지</summary>
+            <ul>
+              <li><code>codexAgentDef</code>에 해당하는 runner args, stdin prompt delivery, JSON event parser.</li>
+              <li>skills/design-systems/resource scanner와 prompt composer.</li>
+              <li>project cwd, active skill staging, linked read-only dir, generated image dir allowlist.</li>
+              <li>artifact parser, question-form parser, HTML preview/editor runtime.</li>
+              <li>SSE run lifecycle와 cancel/inactivity watchdog.</li>
+            </ul>
+          </details>
+          <details data-keywords="remove providers">
+            <summary>축소 가능</summary>
+            <ul>
+              <li>Claude/Gemini/Qoder/OpenCode/Copilot/Pi/ACP adapter registry와 per-provider parser.</li>
+              <li>Anthropic/OpenAI API fallback provider UI. 단, OpenAI Codex CLI 설정 UI는 유지.</li>
+              <li>비-Codex MCP 전달 형식. Codex의 MCP/skill 로딩은 버전별로 분리 검증 필요.</li>
+              <li>media provider path는 이미지 생성 기능을 쓰지 않는다면 후순위.</li>
+            </ul>
+          </details>
+        </div>
+      </section>
+
+      <section>
+        <h2>Bun 기반 시스템으로의 아키텍처 매핑</h2>
+        <table>
+          <thead><tr><th>Open Design</th><th>Bun 시스템 모듈명 제안</th><th>역할</th></tr></thead>
+          <tbody>
+            <tr><td><code>apps/daemon/src/server.ts</code></td><td><code>agent-runner/server.ts</code></td><td>HTTP/SSE endpoint, run lifecycle, cancel</td></tr>
+            <tr><td><code>runtimes/defs/codex.ts</code></td><td><code>providers/codex-cli.ts</code></td><td>Codex args, env, stdin, JSON stream parser</td></tr>
+            <tr><td><code>prompts/system.ts</code></td><td><code>design/prompt-compose.ts</code></td><td>brief + skill + DESIGN + metadata 조합</td></tr>
+            <tr><td><code>skills.ts</code></td><td><code>design/skill-registry.ts</code></td><td>SKILL.md scan, frontmatter, asset manifest</td></tr>
+            <tr><td><code>ProjectView.tsx</code></td><td><code>ui/chat-artifact-controller.tsx</code></td><td>stream parser, artifact live state, save</td></tr>
+            <tr><td><code>FileViewer.tsx</code> + <code>srcdoc.ts</code></td><td><code>ui/html-editor</code></td><td>iframe preview, inspect/manual edit bridge</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <footer class="foot">다음: <a href="02-prompt-llm-flow.html">LLM 질문/프롬프트 로직 상세 분석</a></footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>

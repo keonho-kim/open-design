@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03. HTML 에디터 - Open Design RE</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">핵심 파일: <code>srcdoc.ts</code>, <code>FileViewer.tsx</code>, <code>edit-mode/*</code>.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Chapter 03</div>
+        <h1>HTML 프리뷰와 에디터의 실제 작동 방식</h1>
+        <p class="lead">Open Design의 HTML 에디터는 Monaco 같은 코드 에디터가 중심이 아닙니다. 생성된 HTML을 sandboxed iframe에 넣고, host가 주입한 bridge script와 postMessage로 선택/검사/수정 흐름을 만듭니다.</p>
+      </section>
+
+      <section class="toolbar">
+        <input class="search" data-filter="[data-keywords]" placeholder="검색: srcdoc, iframe, manual edit, inspect, artifact">
+        <button data-expand-all>모두 펼치기</button>
+        <button data-collapse-all>모두 접기</button>
+      </section>
+
+      <section>
+        <h2>Artifact 스트리밍부터 파일 저장까지</h2>
+        <div class="flow step-grid">
+          <div class="step"><small>1</small><strong>stream delta</strong><span>Codex text delta가 Web으로 들어옵니다.</span></div>
+          <div class="step"><small>2</small><strong><code>createArtifactParser()</code></strong><span><code>&lt;artifact ...&gt;</code> 시작/청크/종료 이벤트를 생성합니다.</span></div>
+          <div class="step"><small>3</small><strong>live artifact state</strong><span><code>ProjectView</code>가 streaming HTML을 <code>artifact.html</code> state로 유지합니다.</span></div>
+          <div class="step"><small>4</small><strong>preview render</strong><span><code>FileViewer</code> 또는 synthetic preview가 <code>buildSrcdoc()</code>로 iframe 문서를 만듭니다.</span></div>
+          <div class="step"><small>5</small><strong>persist</strong><span>run 종료 후 <code>validateHtmlArtifact()</code>와 manifest 생성 후 <code>writeProjectTextFile()</code>로 저장.</span></div>
+          <div class="step"><small>6</small><strong>file tab</strong><span>저장된 HTML은 프로젝트 파일 탭으로 열리고 이후 편집 대상이 됩니다.</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2><code>buildSrcdoc()</code>가 주입하는 것들</h2>
+        <table>
+          <thead><tr><th>주입 요소</th><th>조건</th><th>역할</th><th>소스</th></tr></thead>
+          <tbody>
+            <tr><td>document wrapper</td><td>fragment HTML일 때</td><td>doctype/head/body를 보강</td><td><a href="../apps/web/src/runtime/srcdoc.ts">srcdoc.ts</a></td></tr>
+            <tr><td>base href</td><td>project file preview</td><td>상대 asset path가 project raw URL 기준으로 해석되게 함</td><td><code>injectBaseHref</code></td></tr>
+            <tr><td>sandbox shim</td><td>항상</td><td>opaque-origin iframe에서 localStorage/sessionStorage 예외를 막는 in-memory shim</td><td><code>injectSandboxShim</code></td></tr>
+            <tr><td>deck bridge</td><td>deck preview</td><td>host가 slide next/prev/go를 postMessage로 제어</td><td><code>injectDeckBridge</code></td></tr>
+            <tr><td>selection bridge</td><td>comment/inspect</td><td><code>data-od-id</code>, <code>data-screen-label</code> 대상 수집과 클릭 selection</td><td><code>injectSelectionBridge</code></td></tr>
+            <tr><td>palette bridge</td><td>palette tweak</td><td>DOM 색상을 선택한 palette hue로 runtime 변환</td><td><code>injectPaletteBridge</code></td></tr>
+            <tr><td>manual edit bridge</td><td>manual edit mode</td><td>편집 가능한 element 발견, click select, target metadata 전송</td><td><a href="../apps/web/src/edit-mode/bridge.ts">bridge.ts</a></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Manual Edit Mode 상세</h2>
+        <details open data-keywords="manual edit target discovery">
+          <summary>1. 편집 대상 발견</summary>
+          <p><code>MANUAL_EDIT_DISCOVERY_SELECTOR</code>는 <code>main, nav, section, article, header, footer, div, h1, h2, h3, p, a, button, img, strong, span</code>입니다. bridge는 이 중 실제 크기가 있고 source mapping 가능한 요소만 target으로 보냅니다.</p>
+          <p>source mapping 기준은 <code>data-od-id</code> 또는 host가 주입한 <code>data-od-source-path</code>입니다. LLM 산출물에 <code>data-od-id</code>가 많을수록 편집 정확도가 좋아집니다.</p>
+        </details>
+        <details data-keywords="manual edit postmessage">
+          <summary>2. iframe ↔ host 메시지</summary>
+          <pre><code>// iframe → host
+{ type: 'od-edit-targets', targets: [...] }
+{ type: 'od-edit-select', target: { id, kind, label, fields, attributes, styles, outerHtml } }
+
+// host → iframe
+{ type: 'od-edit-mode', enabled: true }</code></pre>
+          <p>host는 <code>ev.source === iframeRef.current.contentWindow</code>를 검사해 해당 iframe에서 온 메시지만 받습니다.</p>
+        </details>
+        <details data-keywords="manual edit panel patches">
+          <summary>3. 패널과 patch 종류</summary>
+          <p><a href="../apps/web/src/components/ManualEditPanel.tsx">ManualEditPanel</a>은 layer list, content/style/attributes/html/source 탭, undo/redo history를 제공합니다.</p>
+          <ul>
+            <li><code>set-text</code>: 자식 element가 없는 텍스트 노드만 안전하게 변경.</li>
+            <li><code>set-link</code>: href와 label 변경. nested markup이면 label 변경 제한.</li>
+            <li><code>set-image</code>: src/alt 변경.</li>
+            <li><code>set-style</code>: inline style property를 camelCase → kebab-case로 적용.</li>
+            <li><code>set-attributes</code>: 안전한 attribute명만 허용, protected <code>data-od-*</code>는 보호.</li>
+            <li><code>set-outer-html</code>: replacement HTML은 root element 정확히 1개여야 함.</li>
+            <li><code>set-full-source</code>: 전체 HTML source를 직접 교체.</li>
+          </ul>
+        </details>
+        <details data-keywords="source patch domparser">
+          <summary>4. 원본 HTML 수정</summary>
+          <p><a href="../apps/web/src/edit-mode/source-patches.ts">source-patches.ts</a>는 browser <code>DOMParser</code>로 원본 HTML을 파싱하고, <code>data-od-id</code>, <code>data-od-runtime-id</code>, path id 순서로 element를 찾습니다. 수정 후 full document면 <code>&lt;!doctype html&gt;</code> + <code>documentElement.outerHTML</code>로 직렬화합니다.</p>
+        </details>
+        <details data-keywords="save write project file undo redo">
+          <summary>5. 저장/undo/redo</summary>
+          <p><code>FileViewer.applyManualEdit()</code>는 patch 적용 결과를 <code>writeProjectTextFile(projectId, file.name, result.source, { artifactManifest })</code>로 저장합니다. 파일이 외부에서 바뀐 경우 최신 source를 다시 읽고 history를 비워 덮어쓰기를 방지합니다.</p>
+        </details>
+      </section>
+
+      <section>
+        <h2>Inspect Mode와 Comment Mode</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="inspect style overrides">
+            <h3>Inspect Mode</h3>
+            <p>selection bridge로 고른 element에 대해 color/background/font size/weight/padding/radius/text align 등을 host panel에서 조절합니다. runtime preview에는 <code>od:inspect-set</code> 메시지를 보내고, 저장 시 host가 가진 override map을 <code>&lt;style data-od-inspect-overrides&gt;</code>로 원본 HTML에 삽입합니다.</p>
+          </article>
+          <article class="card" data-keywords="comment targets attachments">
+            <h3>Comment Mode</h3>
+            <p>동일한 selection bridge를 사용하지만 목적은 style override가 아니라 comment attachment 생성입니다. 선택 대상의 selector, label, currentText, htmlHint가 다음 Codex turn의 commentAttachments로 들어갑니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>보안/격리 포인트</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="sandbox security">
+            <h3>iframe sandbox</h3>
+            <p>프리뷰 iframe은 기본적으로 <code>sandbox="allow-scripts"</code>입니다. <code>allow-same-origin</code>을 주지 않아 generated HTML이 host origin storage에 접근하지 못하게 합니다.</p>
+          </article>
+          <article class="card" data-keywords="postmessage forgery">
+            <h3>postMessage 신뢰 경계</h3>
+            <p>host는 iframe source 검사를 수행합니다. Inspect override 저장은 iframe이 보낸 CSS가 아니라 host state에서 직렬화합니다. generated artifact가 forged postMessage를 보내도 source 저장을 직접 조작하지 못하게 한 설계입니다.</p>
+          </article>
+          <article class="card" data-keywords="html parsing safety">
+            <h3>HTML patch 제한</h3>
+            <p>outerHTML 교체는 root element 1개만 허용하고, attribute name regex와 protected attributes로 최소한의 구조 보호를 합니다. 하지만 sanitizer가 아니므로 untrusted HTML execution은 iframe sandbox에 의존합니다.</p>
+          </article>
+          <article class="card" data-keywords="artifact validation">
+            <h3>artifact 저장 검증</h3>
+            <p><code>&lt;artifact&gt;</code> body가 완전한 HTML 문서가 아니면 저장을 거부합니다. 기존 파일 편집 후 prose summary를 artifact로 감싸는 LLM 실수를 막기 위한 guard입니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>기획서 기반 시스템에 필요한 HTML 에디터 요구사항</h2>
+        <div class="checklist card">
+          <label><input type="checkbox"> LLM에게 모든 주요 section/component에 안정적인 <code>data-od-id</code>를 붙이도록 prompt에 명시한다.</label>
+          <label><input type="checkbox"> HTML preview는 <code>allow-same-origin</code> 없는 sandbox iframe으로 격리한다.</label>
+          <label><input type="checkbox"> postMessage는 iframe contentWindow source를 검증한다.</label>
+          <label><input type="checkbox"> 수동 편집은 runtime DOM을 직접 저장하지 않고 원본 HTML source에 patch한다.</label>
+          <label><input type="checkbox"> undo/redo는 source snapshot 기반으로 구현하고 외부 변경 충돌을 감지한다.</label>
+          <label><input type="checkbox"> style tweaks는 preview 즉시 반영과 source persist 경로를 분리한다.</label>
+          <label><input type="checkbox"> 저장 전 artifact가 완전한 HTML 문서인지 검증한다.</label>
+        </div>
+      </section>
+
+      <section class="callout warning">
+        <strong>주의:</strong> Open Design의 manual edit은 HTML-aware patcher지만 AST 수준의 lossless editor는 아닙니다. 포맷/doctype/attribute order 변화가 생길 수 있습니다. 복잡한 기획서 기반 코드 에이전트에 붙일 때는 "디자인 artifact HTML" 편집용으로 한정하고, 실제 앱 코드 편집은 Codex tool path로 분리하는 것이 안전합니다.
+      </section>
+
+      <footer class="foot">다음: <a href="04-skills-design-systems.html">Skills/DESIGN 로딩 구조</a></footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>

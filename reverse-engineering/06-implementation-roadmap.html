@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06. 구현 로드맵 - Open Design RE</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">이 장은 실제 편입 작업 checklist입니다.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Chapter 06</div>
+        <h1>역공학 이후 시스템 편입 로드맵</h1>
+        <p class="lead">아래 계획은 Open Design 기능을 그대로 복제하는 것이 아니라, 기획서 기반 코딩 에이전트에서 필요한 기능만 Codex 중심으로 흡수하는 작업 순서입니다.</p>
+      </section>
+
+      <section class="toolbar">
+        <input class="search" data-filter="[data-keywords]" placeholder="검색: mvp, tests, risk, editor">
+        <button data-expand-all>모두 펼치기</button>
+        <button data-collapse-all>모두 접기</button>
+      </section>
+
+      <section>
+        <h2>MVP 범위</h2>
+        <div class="checklist card">
+          <label><input type="checkbox"> Codex CLI detection: <code>codex --version</code>, path, config/auth 안내.</label>
+          <label><input type="checkbox"> Run API: create/status/events/cancel, in-memory event replay, terminal status reconciliation.</label>
+          <label><input type="checkbox"> Codex runner: args, stdin prompt, cwd, env, stderr capture, timeout/inactivity watchdog.</label>
+          <label><input type="checkbox"> Codex JSON parser: status, tool_use/tool_result, text_delta, usage, error.</label>
+          <label><input type="checkbox"> Prompt composer: discovery form + PRD metadata + active skill + active DESIGN.</label>
+          <label><input type="checkbox"> Question form parser/render/answer formatter.</label>
+          <label><input type="checkbox"> Artifact parser: streaming <code>&lt;artifact&gt;</code>, live preview, complete HTML validation.</label>
+          <label><input type="checkbox"> Project file store: write/read/list, artifact manifest, path traversal guard.</label>
+          <label><input type="checkbox"> Sandboxed HTML preview: <code>srcdoc</code>, storage shim, base href.</label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Phase Plan</h2>
+        <details open data-keywords="phase 1 codex runtime">
+          <summary>Phase 1. Codex execution core</summary>
+          <ul>
+            <li>Codex adapter를 Open Design에서 분리해 Bun용 runner로 재작성.</li>
+            <li>stdin prompt delivery를 기본값으로 하고 args에 <code>-</code>를 넣지 않음.</li>
+            <li>JSON event parser를 테스트 fixture 기반으로 작성.</li>
+            <li>child close 시 empty-output guard, non-zero exit, signal, structured error를 구분.</li>
+          </ul>
+          <p><strong>완료 기준:</strong> fake Codex JSONL fixture와 실제 Codex CLI dry run이 모두 UI text/tool events로 표시됩니다.</p>
+        </details>
+
+        <details data-keywords="phase 2 prompt question">
+          <summary>Phase 2. Prompt + 질문 폼</summary>
+          <ul>
+            <li>Open Design discovery layer를 기획서 기반 도메인에 맞게 축약/개조.</li>
+            <li>PRD metadata block 설계: productType, actors, featureScope, platformTargets, dataSources, auth, constraints.</li>
+            <li>질문 schema는 Open Design과 호환: radio/checkbox/select/text/textarea/direction-cards.</li>
+            <li>답변 메시지 <code>[form answers — id]</code> 형식을 유지해 Codex가 다음 턴에서 자연어로 읽게 함.</li>
+          </ul>
+          <p><strong>완료 기준:</strong> 새 프로젝트 첫 턴에서 질문 폼만 생성하고, 답변 후 Todo/구현 단계로 진입합니다.</p>
+        </details>
+
+        <details data-keywords="phase 3 resources">
+          <summary>Phase 3. Skills/DESIGN registry</summary>
+          <ul>
+            <li><code>skills/</code>, <code>design-systems/</code> root와 user override root를 분리.</li>
+            <li>frontmatter parser와 normalized catalog schema 작성.</li>
+            <li>active skill sidefile staging 구현: project cwd <code>.od-skills/</code> copy.</li>
+            <li>기획서 유형별 starter skills 작성: web app, dashboard, mobile, admin, docs.</li>
+          </ul>
+          <p><strong>완료 기준:</strong> skill/design 선택이 prompt에 반영되고 Codex가 staged <code>assets/template.html</code>을 읽을 수 있습니다.</p>
+        </details>
+
+        <details data-keywords="phase 4 artifact preview">
+          <summary>Phase 4. HTML artifact preview/store</summary>
+          <ul>
+            <li>streaming artifact parser를 가져와 code fence/inline code skip 로직 유지.</li>
+            <li>HTML complete document validation 추가.</li>
+            <li>artifact manifest schema 정의: kind, renderer, entry, sourceSkillId, designSystemId, generatedAt.</li>
+            <li>iframe preview에 sandbox shim/base href/deck bridge 최소 구현.</li>
+          </ul>
+          <p><strong>완료 기준:</strong> Codex가 emit한 HTML artifact가 stream 중 preview되고 종료 후 project file로 저장됩니다.</p>
+        </details>
+
+        <details data-keywords="phase 5 editor">
+          <summary>Phase 5. HTML editor</summary>
+          <ul>
+            <li>manual edit bridge와 source patcher 이식.</li>
+            <li>LLM prompt에 <code>data-od-id</code> 생성 규칙 추가.</li>
+            <li>content/style/attributes/html/source 탭 중 content/style/source부터 MVP 구현.</li>
+            <li>undo/redo source snapshot, 외부 변경 충돌 감지.</li>
+          </ul>
+          <p><strong>완료 기준:</strong> iframe에서 element 클릭 → panel 수정 → 원본 HTML 저장 → preview 갱신이 가능합니다.</p>
+        </details>
+
+        <details data-keywords="phase 6 hardening">
+          <summary>Phase 6. 품질/보안 강화</summary>
+          <ul>
+            <li>artifact lint: placeholder, lorem ipsum, empty shell, script 위험 패턴 경고.</li>
+            <li>visual regression: Playwright screenshot diff.</li>
+            <li>prompt regression: question-form turn rules와 artifact no-emit invariant 테스트.</li>
+            <li>Codex stall/timeout/large output/permission failure 케이스 UI 처리.</li>
+          </ul>
+          <p><strong>완료 기준:</strong> 실패가 silent success로 보이지 않고 사용자에게 원인과 재시도 경로가 표시됩니다.</p>
+        </details>
+      </section>
+
+      <section>
+        <h2>테스트 계획</h2>
+        <table>
+          <thead><tr><th>테스트</th><th>입력</th><th>검증</th></tr></thead>
+          <tbody>
+            <tr><td>Codex parser unit</td><td>JSONL fixture</td><td>text/tool/usage/error event 순서</td></tr>
+            <tr><td>Question form parser</td><td>정상/깨진 <code>&lt;question-form&gt;</code></td><td>정상은 form segment, 깨진 것은 prose 유지</td></tr>
+            <tr><td>Artifact parser</td><td>code fence 안 artifact 문자열 포함</td><td>실제 artifact만 잡고 code block은 무시</td></tr>
+            <tr><td>Prompt composer snapshot</td><td>skill/design/metadata 조합</td><td>질문 규칙, active DESIGN, active SKILL, cwd hint 포함</td></tr>
+            <tr><td>Manual edit patcher</td><td>data-od-id/path 기반 HTML</td><td>text/style/link/image/outerHTML patch 결과</td></tr>
+            <tr><td>Iframe bridge e2e</td><td>sample artifact</td><td>target discovery, click selection, save roundtrip</td></tr>
+            <tr><td>Security</td><td>악성 script/localStorage/postMessage</td><td>sandbox 격리, source check, host state 저장</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Risk Register</h2>
+        <div class="grid cols-2">
+          <article class="card" data-keywords="risk codex version">
+            <h3>Codex CLI 버전 차이 <span class="pill tag-warn">Medium</span></h3>
+            <p>JSON event shape과 flags가 바뀔 수 있습니다. runner는 version을 로깅하고 parser는 unknown event를 raw로 보존해야 합니다.</p>
+          </article>
+          <article class="card" data-keywords="risk prompt compliance">
+            <h3>LLM prompt 불복종 <span class="pill tag-warn">Medium</span></h3>
+            <p>질문 없이 바로 생성하거나 artifact를 잘못 감쌀 수 있습니다. parser/validator와 retry prompt를 추가해야 합니다.</p>
+          </article>
+          <article class="card" data-keywords="risk html editor source">
+            <h3>HTML source patch 손실 <span class="pill tag-warn">Medium</span></h3>
+            <p>DOMParser 직렬화는 포맷을 보존하지 않습니다. artifact HTML용으로만 사용하고 실제 앱 source는 Codex edit path로 분리합니다.</p>
+          </article>
+          <article class="card" data-keywords="risk sandbox">
+            <h3>Untrusted HTML 실행 <span class="pill tag-bad">High</span></h3>
+            <p>generated HTML은 script를 포함할 수 있습니다. iframe sandbox, no same-origin, postMessage source 검증을 반드시 유지합니다.</p>
+          </article>
+          <article class="card" data-keywords="risk files overwrite">
+            <h3>프로젝트 파일 덮어쓰기 <span class="pill tag-bad">High</span></h3>
+            <p>Codex가 기존 파일을 덮을 수 있습니다. prompt에 existing file list와 "do not overwrite"를 넣고, API 저장도 collision 정책을 둡니다.</p>
+          </article>
+          <article class="card" data-keywords="risk asset access">
+            <h3>Skill sidefile 접근 실패 <span class="pill tag-warn">Medium</span></h3>
+            <p>Codex sandbox에서 repo resource를 못 읽을 수 있습니다. active skill을 cwd 내부로 복사하는 staging을 우선 구현합니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>Acceptance Criteria</h2>
+        <div class="checklist card">
+          <label><input type="checkbox"> 사용자가 PRD를 넣으면 Codex 첫 응답은 질문 폼으로 시작한다.</label>
+          <label><input type="checkbox"> 질문 답변 후 Codex가 Todo plan을 만들고 프로젝트 cwd에 HTML artifact를 생성한다.</label>
+          <label><input type="checkbox"> 생성 HTML은 stream 중 preview되고 종료 후 파일로 저장된다.</label>
+          <label><input type="checkbox"> active SKILL.md와 DESIGN.md를 바꾸면 output 구조/미감이 관찰 가능하게 달라진다.</label>
+          <label><input type="checkbox"> iframe preview는 generated script가 host storage/document에 접근하지 못한다.</label>
+          <label><input type="checkbox"> HTML editor에서 element를 클릭하고 텍스트/style/source를 수정해 저장할 수 있다.</label>
+          <label><input type="checkbox"> Codex 실패/빈 응답/stall이 성공처럼 표시되지 않는다.</label>
+          <label><input type="checkbox"> 모든 핵심 흐름에 unit 또는 e2e test fixture가 있다.</label>
+        </div>
+      </section>
+
+      <section class="callout">
+        <strong>최종 권장 구조:</strong>
+        Open Design 기능은 "Design Artifact Workbench"로 모듈화하고, 기존 기획서 기반 코딩 에이전트의 repository editing workflow와 분리하세요. PRD 해석과 질문 폼은 공통으로 쓰되, HTML prototype/editor는 빠른 시각 검증용, Codex code edit는 실제 구현용으로 역할을 나누는 것이 유지보수성이 가장 좋습니다.
+      </section>
+
+      <footer class="foot">문서 세트 끝. <a href="index.html">요약 대시보드로 돌아가기</a></footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>

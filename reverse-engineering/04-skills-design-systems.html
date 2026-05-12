@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>04. Skills/DESIGN - Open Design RE</title>
+  <link rel="stylesheet" href="assets/reverse-engineering.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="index.html"><strong>Open Design RE</strong><span>Codex 전용 통합 분석</span></a>
+      <nav class="nav">
+        <a href="index.html">00. 요약 대시보드</a>
+        <a href="01-system-architecture.html">01. 시스템 구조</a>
+        <a href="02-prompt-llm-flow.html">02. LLM/질문 로직</a>
+        <a href="03-html-editor-preview.html">03. HTML 에디터</a>
+        <a href="04-skills-design-systems.html">04. Skills/DESIGN</a>
+        <a href="05-bun-codex-integration.html">05. Bun+Codex 통합</a>
+        <a href="06-implementation-roadmap.html">06. 구현 로드맵</a>
+      </nav>
+      <p class="side-note">복사 자산은 <code>assets/source-files</code>에 있습니다.</p>
+    </aside>
+    <main class="content">
+      <section class="hero">
+        <div class="eyebrow">Chapter 04</div>
+        <h1>SKILL.md와 DESIGN.md 로딩/주입 구조</h1>
+        <p class="lead">Open Design의 품질은 코드보다 파일 기반 지식 자산에 크게 의존합니다. <code>SKILL.md</code>는 산출물 종류별 workflow이고, <code>DESIGN.md</code>는 브랜드/시각 시스템 token source입니다.</p>
+      </section>
+
+      <section class="toolbar">
+        <input class="search" data-filter="[data-keywords]" placeholder="검색: frontmatter, staging, assets, design system">
+        <button data-expand-all>모두 펼치기</button>
+        <button data-collapse-all>모두 접기</button>
+      </section>
+
+      <section class="grid cols-3">
+        <article class="card metric"><strong>217</strong><span>현재 repo의 <code>SKILL.md</code> 파일 수</span></article>
+        <article class="card metric"><strong>149</strong><span>현재 repo의 <code>DESIGN.md</code> 파일 수</span></article>
+        <article class="card metric"><strong>12</strong><span><code>craft/*.md</code> universal craft references</span></article>
+      </section>
+
+      <section>
+        <h2>Skill 로딩</h2>
+        <details open data-keywords="listSkills frontmatter">
+          <summary>1. scan + frontmatter parse</summary>
+          <p><a href="../apps/daemon/src/skills.ts">skills.ts</a>의 <code>listSkills()</code>는 root 배열을 순서대로 훑고 각 하위 폴더의 <code>SKILL.md</code>를 읽습니다. 첫 번째 root가 user root라서 id collision 시 사용자 스킬이 built-in을 shadow합니다.</p>
+          <p><a href="../apps/daemon/src/frontmatter.ts">frontmatter.ts</a>는 dependency 없는 YAML subset parser입니다. scalar, flat array, block literal 정도만 지원하므로 복잡한 YAML은 피해야 합니다.</p>
+        </details>
+        <details data-keywords="normalized fields">
+          <summary>2. 정규화되는 필드</summary>
+          <table>
+            <thead><tr><th>필드</th><th>용도</th></tr></thead>
+            <tbody>
+              <tr><td><code>name</code></td><td>skill id. 없으면 폴더명.</td></tr>
+              <tr><td><code>description</code>, <code>triggers</code></td><td>UI 카드와 검색/추천 힌트.</td></tr>
+              <tr><td><code>od.mode</code></td><td><code>prototype|deck|template|design-system|image|video|audio</code>. 없으면 body/description으로 추론.</td></tr>
+              <tr><td><code>od.surface</code></td><td><code>web|image|video|audio</code>. mode 기반 추론.</td></tr>
+              <tr><td><code>od.design_system.requires</code></td><td>active DESIGN.md 필요 여부. 기본 true.</td></tr>
+              <tr><td><code>od.craft.requires</code></td><td>추가 삽입할 craft 문서 slug 목록.</td></tr>
+              <tr><td><code>od.preview.type</code></td><td>html 등 preview renderer 힌트.</td></tr>
+              <tr><td><code>od.default_for</code></td><td>mode별 기본 skill 선택.</td></tr>
+              <tr><td><code>od.example_prompt</code></td><td>템플릿/갤러리에서 "Use this prompt"에 활용.</td></tr>
+            </tbody>
+          </table>
+        </details>
+        <details data-keywords="attachments preamble">
+          <summary>3. sidefile이 있으면 skill root preamble 추가</summary>
+          <p>스킬 폴더에 <code>assets/</code>, <code>references/</code>, <code>scripts/</code> 등이 있으면 body 앞에 "Skill root absolute/cwd-relative" 정보를 추가합니다. 이것이 Codex가 <code>assets/template.html</code>, <code>references/checklist.md</code>를 실제 파일로 읽게 만드는 장치입니다.</p>
+        </details>
+      </section>
+
+      <section>
+        <h2>Skill sidefile staging</h2>
+        <div class="flow step-grid">
+          <div class="step"><small>1</small><strong>activeSkillDir resolve</strong><span><code>findSkillById()</code>로 선택된 skill의 실제 dir 확인.</span></div>
+          <div class="step"><small>2</small><strong>copy to project cwd</strong><span><code>&lt;cwd&gt;/.od-skills/&lt;folder&gt;</code>에 active skill을 복사합니다. symlink가 아니라 copy라 원본 보호.</span></div>
+          <div class="step"><small>3</small><strong>Codex allowlist 제한</strong><span>Codex에는 skills/design-systems 전체를 <code>--add-dir</code>로 주지 않습니다. Codex의 add-dir은 writable로 취급되기 때문입니다.</span></div>
+          <div class="step"><small>4</small><strong>prompt preflight</strong><span>skill body가 <code>assets/template.html</code>, <code>references/layouts.md</code>, <code>references/checklist.md</code>를 언급하면 읽으라는 hard pre-flight 문구를 삽입.</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Design System 로딩</h2>
+        <details open data-keywords="design systems list">
+          <summary>1. catalog summary</summary>
+          <p><a href="../apps/daemon/src/design-systems.ts">design-systems.ts</a>는 <code>design-systems/*/DESIGN.md</code>를 스캔해 id, title, category, summary, swatches, surface, body를 만듭니다.</p>
+          <ul>
+            <li>title: 첫 H1에서 추출하고 "Design System Inspired by" 같은 prefix 제거.</li>
+            <li>category: H1 아래 <code>&gt; Category:</code> blockquote.</li>
+            <li>swatches: markdown의 hex color token을 regex로 뽑아 bg/support/fg/accent 4개 선택.</li>
+            <li>surface: <code>&gt; Surface:</code> 없으면 web.</li>
+          </ul>
+        </details>
+        <details data-keywords="design prompt injection">
+          <summary>2. prompt injection</summary>
+          <p>선택된 <code>DESIGN.md</code> body는 <code>composeSystemPrompt()</code>에서 <code>## Active design system</code> 블록으로 들어갑니다. 지시 문구는 색/타이포/간격/component rule의 권위 있는 source로 취급하라고 명시합니다.</p>
+          <p><code>OD_DESIGN_TOKEN_CHANNEL=1</code>이면 같은 폴더의 <code>tokens.css</code>, <code>components.html</code>도 추가로 읽어 CSS token contract와 reference fixture로 삽입합니다.</p>
+        </details>
+        <details data-keywords="design schema">
+          <summary>3. schema</summary>
+          <p>문서상 가이드는 9개 numbered section을 요구합니다. 실제 scanner는 H1/category/swatches 중심으로 동작하지만, prompt 품질과 skill grep 의존성을 위해 9-section 형식 유지가 중요합니다.</p>
+          <pre><code># Design System Inspired by Brand
+&gt; Category: Developer Tools
+
+## 1. Visual Theme & Atmosphere
+## 2. Color
+## 3. Typography
+## 4. Spacing
+## 5. Layout & Composition
+## 6. Components
+## 7. Motion & Interaction
+## 8. Voice & Brand
+## 9. Anti-patterns</code></pre>
+        </details>
+      </section>
+
+      <section>
+        <h2>Static routes</h2>
+        <table>
+          <thead><tr><th>API</th><th>역할</th></tr></thead>
+          <tbody>
+            <tr><td><code>GET /api/skills</code></td><td>functional skills 목록. body/dir 제외.</td></tr>
+            <tr><td><code>GET /api/design-templates</code></td><td>rendering catalogue. shape은 SkillSummary와 동일.</td></tr>
+            <tr><td><code>GET /api/skills/:id</code></td><td>skill body 포함 상세.</td></tr>
+            <tr><td><code>GET /api/skills/:id/files</code></td><td>Settings UI 파일 트리.</td></tr>
+            <tr><td><code>GET /api/skills/:id/example</code></td><td>example.html, assets/template.html 등을 찾아 preview HTML 반환.</td></tr>
+            <tr><td><code>GET /api/skills/:id/assets/*</code></td><td>skill example에서 참조하는 asset 파일 제공.</td></tr>
+            <tr><td><code>GET /api/design-systems</code></td><td>디자인 시스템 catalog.</td></tr>
+            <tr><td><code>GET /api/design-systems/:id/preview</code></td><td>DESIGN.md 기반 preview HTML 생성.</td></tr>
+            <tr><td><code>POST /api/skills/install</code></td><td>user skill 설치. local origin required.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>복사된 자산 샘플</h2>
+        <div class="source-list">
+          <a href="assets/source-files/design-templates/web-prototype/SKILL.md">design-templates/web-prototype/SKILL.md</a>
+          <a href="assets/source-files/design-templates/html-ppt/SKILL.md">design-templates/html-ppt/SKILL.md</a>
+          <a href="assets/source-files/design-templates/mobile-app/SKILL.md">design-templates/mobile-app/SKILL.md</a>
+          <a href="assets/source-files/design-templates/dashboard/SKILL.md">design-templates/dashboard/SKILL.md</a>
+          <a href="assets/source-files/skills/design-brief/SKILL.md">skills/design-brief/SKILL.md</a>
+          <a href="assets/source-files/skills/frontend-design/SKILL.md">skills/frontend-design/SKILL.md</a>
+          <a href="assets/source-files/design-systems/default/DESIGN.md">design-systems/default/DESIGN.md</a>
+          <a href="assets/source-files/design-systems/openai/DESIGN.md">design-systems/openai/DESIGN.md</a>
+          <a href="assets/source-files/design-systems/kami/DESIGN.md">design-systems/kami/DESIGN.md</a>
+          <a href="assets/source-files/design-systems/linear-app/DESIGN.md">design-systems/linear-app/DESIGN.md</a>
+        </div>
+      </section>
+
+      <section class="callout">
+        <strong>통합 결론:</strong>
+        기획서 기반 시스템에서는 <code>SKILL.md</code>를 "기획서 유형별 실행 프로토콜"로 재정의하는 것이 좋습니다. 예: PRD-to-SaaS, PRD-to-mobile-flow, PRD-to-dashboard, PRD-to-admin-console. <code>DESIGN.md</code>는 브랜드뿐 아니라 고객/제품 도메인별 UI 규칙으로 확장할 수 있습니다.
+      </section>
+
+      <footer class="foot">다음: <a href="05-bun-codex-integration.html">Bun + OpenAI Codex 통합 설계</a></footer>
+    </main>
+  </div>
+  <script src="assets/reverse-engineering.js"></script>
+</body>
+</html>
